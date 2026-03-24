@@ -1,10 +1,25 @@
-import { copilotBaseUrl, copilotHeaders } from "~/lib/api-config"
+import {
+  copilotBaseUrl,
+  copilotHeaders,
+  copilotHeadersWithToken,
+} from "~/lib/api-config"
 import { HTTPError } from "~/lib/error"
 import { state } from "~/lib/state"
 
-export const getModels = async () => {
+/**
+ * Options for per-request token override
+ */
+interface GetModelsOptions {
+  copilotToken?: string
+}
+
+export const getModels = async (options?: GetModelsOptions) => {
+  const headers = options?.copilotToken
+    ? copilotHeadersWithToken(options.copilotToken, state)
+    : copilotHeaders(state)
+
   const response = await fetch(`${copilotBaseUrl(state)}/models`, {
-    headers: copilotHeaders(state),
+    headers,
   })
 
   if (!response.ok) throw new HTTPError("Failed to get models", response)

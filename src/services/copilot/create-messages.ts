@@ -10,6 +10,7 @@ import type { SubagentMarker } from "~/routes/messages/subagent-marker"
 import {
   copilotBaseUrl,
   copilotHeaders,
+  copilotHeadersWithToken,
   prepareForCompact,
   prepareInteractionHeaders,
 } from "~/lib/api-config"
@@ -66,9 +67,11 @@ export const createMessages = async (
     requestId: string
     sessionId?: string
     isCompact?: boolean
+    copilotToken?: string
   },
 ): Promise<CreateMessagesReturn> => {
-  if (!state.copilotToken) throw new Error("Copilot token not found")
+  const effectiveToken = options.copilotToken ?? state.copilotToken
+  if (!effectiveToken) throw new Error("Copilot token not found")
 
   const enableVision = payload.messages.some(
     (message) =>
@@ -86,7 +89,9 @@ export const createMessages = async (
   }
 
   const headers: Record<string, string> = {
-    ...copilotHeaders(state, options.requestId, enableVision),
+    ...(options.copilotToken
+      ? copilotHeadersWithToken(options.copilotToken, state, options.requestId, enableVision)
+      : copilotHeaders(state, options.requestId, enableVision)),
     "x-initiator": isInitiateRequest ? "user" : "agent",
   }
 

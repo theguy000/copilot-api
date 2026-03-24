@@ -6,7 +6,9 @@ import consola from "consola"
 import { serve, type ServerHandler } from "srvx"
 import invariant from "tiny-invariant"
 
+import { startBillingHeartbeat } from "./lib/billing-heartbeat"
 import { mergeConfigWithDefaults } from "./lib/config"
+import { setupProcessErrorHandlers } from "./lib/error-monitor"
 import { ensurePaths } from "./lib/paths"
 import { initProxyFromEnv } from "./lib/proxy"
 import { generateEnvScript } from "./lib/shell"
@@ -30,9 +32,13 @@ interface RunServerOptions {
   claudeCode: boolean
   showToken: boolean
   proxyEnv: boolean
+  standalone: boolean
 }
 
 export async function runServer(options: RunServerOptions): Promise<void> {
+  // Setup process-level error handlers FIRST
+  setupProcessErrorHandlers()
+
   // Ensure config is merged with defaults at startup
   mergeConfigWithDefaults()
 
@@ -61,23 +67,32 @@ export async function runServer(options: RunServerOptions): Promise<void> {
   cacheMacMachineId()
   cacheVsCodeSessionId()
 
-  if (options.githubToken) {
-    state.githubToken = options.githubToken
-    consola.info("Using provided GitHub token")
+  // Standalone mode: authenticate on startup with a single GitHub account
+  // Default mode (sidecar): tokens provided per-request via x-github-token header
+  if (options.standalone) {
+    consola.info("🔑 Running in standalone mode - authenticating on startup")
+
+    if (options.githubToken) {
+      state.githubToken = options.githubToken
+      consola.info("Using provided GitHub token")
+    } else {
+      await setupGitHubToken()
+    }
+
+    await setupCopilotToken()
+    await cacheModels()
+
+    consola.info(
+      `Available models: \n${state.models?.data.map((model) => `- ${model.id}`).join("\n")}`,
+    )
   } else {
-    await setupGitHubToken()
+    consola.info("🔗 Running in sidecar mode (default) - no startup authentication")
+    consola.info("   Tokens will be provided per-request via x-github-token header")
   }
-
-  await setupCopilotToken()
-  await cacheModels()
-
-  consola.info(
-    `Available models: \n${state.models?.data.map((model) => `- ${model.id}`).join("\n")}`,
-  )
 
   const serverUrl = `http://localhost:${options.port}`
 
-  if (options.claudeCode) {
+  if (options.claudeCode && options.standalone) {
     consola.log(
       "\n💡 Tip: The --claude-code flag simply generates a clipboard command for launching Claude Code. \n"
         + "All models remain fully accessible without this flag, just configure the model ID directly in your settings.json file.",
@@ -124,11 +139,18 @@ export async function runServer(options: RunServerOptions): Promise<void> {
       )
       consola.log(command)
     }
+  } else if (options.claudeCode && !options.standalone) {
+    consola.warn("Claude Code mode requires --standalone flag")
   }
 
   consola.box(
     `🌐 Usage Viewer: ${serverUrl}/usage-viewer?endpoint=${serverUrl}/usage`,
   )
+
+  // Start billing heartbeat in standalone mode only
+  if (options.standalone) {
+    startBillingHeartbeat()
+  }
 
   const { server } = await import("./server")
 
@@ -205,6 +227,12 @@ export const start = defineCommand({
       default: false,
       description: "Initialize proxy from environment variables",
     },
+    standalone: {
+      type: "boolean",
+      default: false,
+      description:
+        "Run in standalone mode: authenticate on startup with device flow. Use this when running without a proxy, for direct access with a single GitHub account.",
+    },
   },
   run({ args }) {
     const rateLimitRaw = args["rate-limit"]
@@ -223,6 +251,7 @@ export const start = defineCommand({
       claudeCode: args["claude-code"],
       showToken: args["show-token"],
       proxyEnv: args["proxy-env"],
+      standalone: args.standalone,
     })
   },
 })

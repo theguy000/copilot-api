@@ -4,9 +4,11 @@ import { logger } from "hono/logger"
 import { readFileSync } from "node:fs"
 
 import { createAuthMiddleware } from "./lib/request-auth"
+import { globalErrorHandler } from "./lib/error-monitor"
 import { traceIdMiddleware } from "./lib/trace"
 import { completionRoutes } from "./routes/chat-completions/route"
 import { embeddingRoutes } from "./routes/embeddings/route"
+import { errorRoutes } from "./routes/errors/route"
 import { messageRoutes } from "./routes/messages/route"
 import { modelRoutes } from "./routes/models/route"
 import { providerMessageRoutes } from "./routes/provider/messages/route"
@@ -16,6 +18,9 @@ import { tokenRoute } from "./routes/token/route"
 import { usageRoute } from "./routes/usage/route"
 
 export const server = new Hono()
+
+// Global error handler - catches ALL unhandled errors in routes
+server.onError(globalErrorHandler)
 
 server.use(traceIdMiddleware)
 server.use(logger())
@@ -39,6 +44,7 @@ server.route("/models", modelRoutes)
 server.route("/embeddings", embeddingRoutes)
 server.route("/usage", usageRoute)
 server.route("/token", tokenRoute)
+server.route("/errors", errorRoutes)
 server.route("/responses", responsesRoutes)
 
 // Compatibility with tools that expect v1/ prefix

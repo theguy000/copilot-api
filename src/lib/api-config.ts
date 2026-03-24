@@ -180,6 +180,58 @@ export const githubHeaders = (state: State) => ({
   "x-vscode-user-agent-library-version": "electron-fetch",
 })
 
+/**
+ * Create GitHub headers with a specific token (for per-request tokens from proxy)
+ */
+export const githubHeadersWithToken = (
+  githubToken: string,
+  state: State,
+) => ({
+  ...standardHeaders(),
+  authorization: `token ${githubToken}`,
+  "editor-version": `vscode/${state.vsCodeVersion}`,
+  "editor-plugin-version": EDITOR_PLUGIN_VERSION,
+  "user-agent": USER_AGENT,
+  "x-github-api-version": API_VERSION,
+  "x-vscode-user-agent-library-version": "electron-fetch",
+})
+
+/**
+ * Create Copilot headers with a specific token (for per-request tokens)
+ */
+export const copilotHeadersWithToken = (
+  copilotToken: string,
+  state: State,
+  requestId?: string,
+  vision: boolean = false,
+) => {
+  const requestIdValue = requestId ?? randomUUID()
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${copilotToken}`,
+    "content-type": standardHeaders()["content-type"],
+    "copilot-integration-id": "vscode-chat",
+    "editor-version": `vscode/${state.vsCodeVersion}`,
+    "editor-plugin-version": EDITOR_PLUGIN_VERSION,
+    "user-agent": USER_AGENT,
+    "openai-intent": "conversation-agent",
+    "x-github-api-version": API_VERSION,
+    "x-request-id": requestIdValue,
+    "x-vscode-user-agent-library-version": "electron-fetch",
+  }
+
+  if (vision) headers["copilot-vision-request"] = "true"
+
+  if (state.macMachineId) {
+    headers["vscode-machineid"] = state.macMachineId
+  }
+
+  if (state.vsCodeSessionId) {
+    headers["vscode-sessionid"] = state.vsCodeSessionId
+  }
+
+  return headers
+}
+
 export const GITHUB_BASE_URL = "https://github.com"
 export const GITHUB_CLIENT_ID = "Iv1.b507a08c87ecfe98"
 export const GITHUB_APP_SCOPES = ["read:user"].join(" ")
