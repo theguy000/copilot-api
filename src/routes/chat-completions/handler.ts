@@ -19,7 +19,7 @@ import {
   logUserActivity,
   USER_ID_HEADER,
 } from "~/lib/user-activity-logger"
-import { generateRequestIdFromPayload, getUUID, isNullish } from "~/lib/utils"
+import { cacheModels, generateRequestIdFromPayload, getUUID, isNullish } from "~/lib/utils"
 import {
   applyResponsesApiContextManagement,
   compactInputByLatestCompaction,
@@ -183,6 +183,12 @@ export async function handleCompletion(c: Context) {
         payload = { ...payload, model: "claude-opus-4.5" }
       }
     }
+  }
+
+  // Ensure models are cached (sidecar mode may not have them yet)
+  if (!state.models) {
+    logger.info("Models not cached yet, fetching...")
+    await cacheModels(perRequestCopilotToken ?? undefined)
   }
 
   // Find the selected model
