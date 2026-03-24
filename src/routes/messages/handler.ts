@@ -13,6 +13,10 @@ import {
 import { createHandlerLogger } from "~/lib/logger"
 import { findEndpointModel } from "~/lib/models"
 import { checkRateLimit } from "~/lib/rate-limit"
+import {
+  getCopilotTokenForRequest,
+  GITHUB_TOKEN_HEADER,
+} from "~/lib/request-token"
 import { state } from "~/lib/state"
 import { generateRequestIdFromPayload, getRootSessionId } from "~/lib/utils"
 import {
@@ -64,6 +68,35 @@ const compactSystemPromptStart =
 export async function handleCompletion(c: Context) {
   await checkRateLimit(state)
 
+  // Check for per-request GitHub token (sidecar mode)
+  const githubToken = c.req.header(GITHUB_TOKEN_HEADER)
+  let perRequestCopilotToken: string | null = null
+
+  if (githubToken) {
+    perRequestCopilotToken = await getCopilotTokenForRequest(githubToken)
+    if (!perRequestCopilotToken) {
+      return c.json(
+        {
+          error: {
+            message: "Failed to authenticate with provided GitHub token",
+            type: "authentication_error",
+          },
+        },
+        401,
+      )
+    }
+  } else if (!state.copilotToken) {
+    return c.json(
+      {
+        error: {
+          message: "No authentication token available. In sidecar mode, x-github-token header is required.",
+          type: "authentication_error",
+        },
+      },
+      401,
+    )
+  }
+
   const anthropicPayload = await c.req.json<AnthropicMessagesPayload>()
   logger.debug("Anthropic request payload:", JSON.stringify(anthropicPayload))
 
@@ -108,6 +141,8 @@ export async function handleCompletion(c: Context) {
   const selectedModel = findEndpointModel(anthropicPayload.model)
   anthropicPayload.model = selectedModel?.id ?? anthropicPayload.model
 
+  const copilotToken = perRequestCopilotToken ?? undefined
+
   if (shouldUseMessagesApi(selectedModel)) {
     return await handleWithMessagesApi(c, anthropicPayload, {
       anthropicBetaHeader: anthropicBeta,
@@ -116,6 +151,7 @@ export async function handleCompletion(c: Context) {
       requestId,
       sessionId,
       isCompact,
+      copilotToken,
     })
   }
 
@@ -126,6 +162,7 @@ export async function handleCompletion(c: Context) {
       requestId,
       sessionId,
       isCompact,
+      copilotToken,
     })
   }
 
@@ -134,6 +171,7 @@ export async function handleCompletion(c: Context) {
     requestId,
     sessionId,
     isCompact,
+    copilotToken,
   })
 }
 
@@ -148,9 +186,10 @@ const handleWithChatCompletions = async (
     requestId: string
     sessionId?: string
     isCompact?: boolean
+    copilotToken?: string
   },
 ) => {
-  const { subagentMarker, requestId, sessionId, isCompact } = options
+  const { subagentMarker, requestId, sessionId, isCompact, copilotToken } = options
   const openAIPayload = translateToOpenAI(anthropicPayload)
   logger.debug(
     "Translated OpenAI request payload:",
@@ -162,6 +201,7 @@ const handleWithChatCompletions = async (
     requestId,
     sessionId,
     isCompact,
+    copilotToken,
   })
 
   if (isNonStreaming(response)) {
@@ -220,9 +260,10 @@ const handleWithResponsesApi = async (
     requestId: string
     sessionId?: string
     isCompact?: boolean
+    copilotToken?: string
   },
 ) => {
-  const { subagentMarker, selectedModel, requestId, sessionId, isCompact } =
+  const { subagentMarker, selectedModel, requestId, sessionId, isCompact, copilotToken } =
     options
 
   const responsesPayload =
@@ -248,6 +289,7 @@ const handleWithResponsesApi = async (
     requestId,
     sessionId,
     isCompact,
+    copilotToken,
   })
 
   if (responsesPayload.stream && isAsyncIterable(response)) {
@@ -327,6 +369,7 @@ const handleWithMessagesApi = async (
     requestId: string
     sessionId?: string
     isCompact?: boolean
+    copilotToken?: string
   },
 ) => {
   const {
@@ -336,6 +379,7 @@ const handleWithMessagesApi = async (
     requestId,
     sessionId,
     isCompact,
+    copilotToken,
   } = options
   // Pre-request processing: filter thinking blocks for Claude models so only
   // valid thinking blocks are sent to the Copilot Messages API.
@@ -374,6 +418,7 @@ const handleWithMessagesApi = async (
     requestId,
     sessionId,
     isCompact,
+    copilotToken,
   })
 
   if (isAsyncIterable(response)) {
