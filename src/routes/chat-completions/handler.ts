@@ -3,6 +3,8 @@ import type { Context } from "hono"
 import { stream } from "hono/streaming"
 import { streamSSE, type SSEMessage } from "hono/streaming"
 
+import type { Model } from "~/services/copilot/get-models"
+
 import { awaitApproval } from "~/lib/approval"
 import { translateModelName, isGeminiModel } from "~/lib/augment-models"
 import { createHandlerLogger } from "~/lib/logger"
@@ -19,12 +21,31 @@ import {
 } from "~/lib/user-activity-logger"
 import { generateRequestIdFromPayload, getUUID, isNullish } from "~/lib/utils"
 import {
+  applyResponsesApiContextManagement,
+  compactInputByLatestCompaction,
+} from "~/routes/responses/utils"
+import {
   createChatCompletions,
   type ChatCompletionResponse,
   type ChatCompletionsPayload,
 } from "~/services/copilot/create-chat-completions"
+import {
+  createResponses,
+  type ResponsesResult,
+  type ResponseStreamEvent,
+} from "~/services/copilot/create-responses"
+
+import {
+  createChatCompletionStreamState,
+  translateChatCompletionsToResponsesPayload,
+  translateResponsesResultToChatCompletion,
+  translateResponsesStreamEventToChatCompletionChunks,
+} from "./responses-bridge"
 
 const logger = createHandlerLogger("chat-completions-handler")
+
+const RESPONSES_ENDPOINT = "/responses"
+const CHAT_COMPLETIONS_ENDPOINT = "/chat/completions"
 
 // Extended payload type with Augment format marker
 interface ExtendedPayload extends ChatCompletionsPayload {
@@ -197,6 +218,29 @@ export async function handleCompletion(c: Context) {
 
   const sessionId = getUUID(requestId)
   logger.debug("Extracted session ID:", sessionId)
+
+  // Check if model only supports /responses (e.g. codex models)
+  const supportsResponses =
+    selectedModel?.supported_endpoints?.includes(RESPONSES_ENDPOINT) ?? false
+  const supportsChatCompletions =
+    selectedModel?.supported_endpoints?.includes(CHAT_COMPLETIONS_ENDPOINT)
+    ?? true
+
+  if (supportsResponses && !supportsChatCompletions) {
+    logger.info(
+      `Model ${payload.model} only supports /responses — routing through Responses API bridge`,
+    )
+    return await handleViaResponsesApi(c, payload, {
+      requestId,
+      sessionId,
+      copilotToken: perRequestCopilotToken ?? undefined,
+      selectedModel,
+      userId,
+      clientIp,
+      requestStartTime,
+      isAugmentFormat,
+    })
+  }
 
   // Pass per-request Copilot token if available
   const response = await createChatCompletions(payload, {
@@ -711,6 +755,157 @@ export async function handleCompletion(c: Context) {
   })
 }
 
+// ============================================================================
+// Responses API Bridge (for models that only support /responses)
+// ============================================================================
+
+interface ResponsesBridgeOptions {
+  requestId: string
+  sessionId: string
+  copilotToken?: string
+  selectedModel?: Model
+  userId?: string
+  clientIp: string
+  requestStartTime: number
+  isAugmentFormat: boolean
+}
+
+async function handleViaResponsesApi(
+  c: Context,
+  payload: ChatCompletionsPayload,
+  opts: ResponsesBridgeOptions,
+) {
+  const responsesPayload = translateChatCompletionsToResponsesPayload(payload)
+
+  applyResponsesApiContextManagement(
+    responsesPayload,
+    opts.selectedModel?.capabilities.limits.max_prompt_tokens,
+  )
+  compactInputByLatestCompaction(responsesPayload)
+
+  logger.debug(
+    "Responses bridge payload:",
+    JSON.stringify(responsesPayload).slice(-400),
+  )
+
+  // Determine vision / initiator
+  const hasVision =
+    Array.isArray(responsesPayload.input)
+    && responsesPayload.input.some(
+      (item) =>
+        "content" in item
+        && Array.isArray(item.content)
+        && (item.content as Array<{ type?: string }>).some(
+          (block) => block.type === "input_image",
+        ),
+    )
+
+  const lastMsg = payload.messages.at(-1)
+  const initiator =
+    lastMsg && ["assistant", "tool"].includes(lastMsg.role) ? "agent" : "user"
+
+  const response = await createResponses(responsesPayload, {
+    vision: hasVision,
+    initiator,
+    requestId: opts.requestId,
+    sessionId: opts.sessionId,
+    ...(opts.copilotToken ? { copilotToken: opts.copilotToken } : {}),
+  })
+
+  // Non-streaming path
+  if (!payload.stream || !isAsyncIterable(response)) {
+    const result = response as ResponsesResult
+    logger.debug(
+      "Responses bridge non-streaming result:",
+      JSON.stringify(result).slice(-400),
+    )
+    const chatResponse = translateResponsesResultToChatCompletion(result)
+
+    const requestDuration = Date.now() - opts.requestStartTime
+    if (opts.userId) {
+      logUserActivity(
+        opts.userId,
+        "INFO",
+        "RESPONSE",
+        "Chat completion completed (responses-bridge, non-streaming)",
+        {
+          model: payload.model,
+          status: 200,
+          duration: requestDuration,
+          clientIp: opts.clientIp,
+        },
+      )
+    }
+
+    if (opts.isAugmentFormat) {
+      const content = chatResponse.choices?.[0]?.message?.content ?? ""
+      return c.json({
+        text: content,
+        stop_reason: 1,
+        unknown_blob_names: [],
+        checkpoint_not_found: false,
+        workspace_file_chunks: [],
+        incorporated_external_sources: [],
+        nodes: [
+          { id: 1, type: 0, content, tool_use: null, thinking: null },
+        ],
+      })
+    }
+
+    return c.json(chatResponse)
+  }
+
+  // Streaming path
+  logger.debug("Responses bridge streaming response")
+
+  return streamSSE(c, async (s) => {
+    const streamState = createChatCompletionStreamState()
+
+    for await (const chunk of response as AsyncIterable<{
+      event?: string
+      data?: string
+    }>) {
+      if (!chunk.data) continue
+
+      let parsed: ResponseStreamEvent
+      try {
+        parsed = JSON.parse(chunk.data) as ResponseStreamEvent
+      } catch {
+        continue
+      }
+
+      const chunks =
+        translateResponsesStreamEventToChatCompletionChunks(parsed, streamState)
+
+      for (const data of chunks) {
+        await s.writeSSE({ data } as SSEMessage)
+      }
+    }
+
+    // Send the [DONE] sentinel
+    await s.writeSSE({ data: "[DONE]" } as SSEMessage)
+
+    const requestDuration = Date.now() - opts.requestStartTime
+    if (opts.userId) {
+      logUserActivity(
+        opts.userId,
+        "INFO",
+        "RESPONSE",
+        "Chat completion completed (responses-bridge, streaming)",
+        {
+          model: payload.model,
+          status: 200,
+          duration: requestDuration,
+          clientIp: opts.clientIp,
+        },
+      )
+    }
+  })
+}
+
+const isAsyncIterable = <T>(value: unknown): value is AsyncIterable<T> =>
+  Boolean(value)
+  && typeof (value as AsyncIterable<T>)[Symbol.asyncIterator] === "function"
 const isNonStreaming = (
   response: Awaited<ReturnType<typeof createChatCompletions>>,
 ): response is ChatCompletionResponse => Object.hasOwn(response, "choices")
