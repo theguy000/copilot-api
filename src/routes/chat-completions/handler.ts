@@ -812,6 +812,10 @@ async function handleViaResponsesApi(
     ...(opts.copilotToken ? { copilotToken: opts.copilotToken } : {}),
   })
 
+  logger.info(
+    `Responses bridge: createResponses returned. stream=${payload.stream}, isAsyncIterable=${isAsyncIterable(response)}`,
+  )
+
   // Non-streaming path
   if (!payload.stream || !isAsyncIterable(response)) {
     const result = response as ResponsesResult
@@ -856,31 +860,43 @@ async function handleViaResponsesApi(
   }
 
   // Streaming path
-  logger.debug("Responses bridge streaming response")
+  logger.info("Responses bridge: entering streaming path, payload.stream =", payload.stream)
 
   return streamSSE(c, async (s) => {
     const streamState = createChatCompletionStreamState()
+    let chunkCount = 0
+    let emittedCount = 0
 
     for await (const chunk of response as AsyncIterable<{
       event?: string
       data?: string
     }>) {
-      if (!chunk.data) continue
+      chunkCount++
+      if (!chunk.data) {
+        logger.debug(`Responses bridge: chunk #${chunkCount} has no data, event=${chunk.event}`)
+        continue
+      }
 
       let parsed: ResponseStreamEvent
       try {
         parsed = JSON.parse(chunk.data) as ResponseStreamEvent
       } catch {
+        logger.debug(`Responses bridge: chunk #${chunkCount} failed to parse: ${chunk.data.slice(0, 100)}`)
         continue
       }
+
+      logger.debug(`Responses bridge: chunk #${chunkCount} type=${parsed.type}`)
 
       const chunks =
         translateResponsesStreamEventToChatCompletionChunks(parsed, streamState)
 
       for (const data of chunks) {
+        emittedCount++
         await s.writeSSE({ data } as SSEMessage)
       }
     }
+
+    logger.info(`Responses bridge: stream ended. Received ${chunkCount} chunks, emitted ${emittedCount} SSE events`)
 
     // Send the [DONE] sentinel
     await s.writeSSE({ data: "[DONE]" } as SSEMessage)
