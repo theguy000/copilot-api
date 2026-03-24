@@ -1,0 +1,91 @@
+name: Sync Upstream
+on:
+  schedule:
+    - cron: '0 0 * * 0'  # Weekly on Sunday midnight UTC
+  workflow_dispatch:       # Manual trigger via GitHub UI
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: augment-proxy
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote
+        run: git remote add upstream https://github.com/caozhiyuan/copilot-api.git
+
+      - name: Fetch upstream
+        run: git fetch upstream
+
+      - name: Check if behind upstream
+        id: check
+        run: |
+          BEHIND=$(git rev-list --count HEAD..upstream/all)
+          echo "behind=$BEHIND" >> $GITHUB_OUTPUT
+          if [ "$BEHIND" = "0" ]; then
+            echo "Already up to date with upstream/all"
+          else
+            echo "$BEHIND commits behind upstream/all"
+          fi
+
+      - name: Attempt merge
+        if: steps.check.outputs.behind != '0'
+        id: merge
+        run: |
+          if git merge upstream/all --no-edit; then
+            echo "success=true" >> $GITHUB_OUTPUT
+          else
+            git merge --abort
+            echo "success=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Push if successful
+        if: steps.check.outputs.behind != '0' && steps.merge.outputs.success == 'true'
+        run: git push origin augment-proxy
+
+      - name: Create issue if conflicts
+        if: steps.check.outputs.behind != '0' && steps.merge.outputs.success == 'false'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: 'upstream-sync',
+              state: 'open'
+            });
+            if (issues.data.length === 0) {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: 'Upstream sync failed — merge conflicts with caozhiyuan/copilot-api',
+                body: [
+                  '## Automatic upstream sync failed',
+                  '',
+                  'The weekly merge of `caozhiyuan/copilot-api` (branch `all`) into',
+                  '`augment-proxy` failed due to merge conflicts.',
+                  '',
+                  '### Manual resolution steps',
+                  '',
+                  '```bash',
+                  'cd copilot-api-fork',
+                  'git checkout augment-proxy',
+                  'git fetch upstream',
+                  'git merge upstream/all',
+                  '# Resolve conflicts...',
+                  'git push origin augment-proxy',
+                  '```',
+                  '',
+                  'After pushing, re-run the sync workflow or close this issue.'
+                ].join('\n'),
+                labels: ['upstream-sync']
+              });
+            }
