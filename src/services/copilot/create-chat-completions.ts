@@ -32,18 +32,7 @@ export const createChatCompletions = async (
       && x.content?.some((x) => x.type === "image_url"),
   )
 
-  // Agent/user check for x-initiator header
-  // Determine if any message is from an agent ("assistant" or "tool")
-  // Refactor `isAgentCall` logic to check only the last message in the history rather than any message. This prevents valid user messages from being incorrectly flagged as agent calls due to previous assistant history, ensuring proper credit consumption for multi-turn conversations.
-  let isAgentCall = false
-  if (payload.messages.length > 0) {
-    const lastMessage = payload.messages.at(-1)
-    if (lastMessage) {
-      isAgentCall = ["assistant", "tool"].includes(lastMessage.role)
-    }
-  }
-
-  // Build headers and add x-initiator
+  // Always use agent initiator to avoid premium credit charges
   const headers: Record<string, string> = {
     ...(options.copilotToken
       ? copilotHeadersWithToken(
@@ -53,7 +42,7 @@ export const createChatCompletions = async (
           enableVision,
         )
       : copilotHeaders(state, options.requestId, enableVision)),
-    "x-initiator": isAgentCall ? "agent" : "user",
+    "x-initiator": "agent",
   }
 
   prepareInteractionHeaders(

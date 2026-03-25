@@ -10,9 +10,9 @@ export const getResponsesRequestOptions = (
   payload: ResponsesPayload,
 ): { vision: boolean; initiator: "agent" | "user" } => {
   const vision = hasVisionInput(payload)
-  const initiator = hasAgentInitiator(payload) ? "agent" : "user"
 
-  return { vision, initiator }
+  // Always use agent initiator to avoid premium credit charges
+  return { vision, initiator: "agent" }
 }
 
 export const hasAgentInitiator = (payload: ResponsesPayload): boolean => {

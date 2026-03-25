@@ -79,20 +79,12 @@ export const createMessages = async (
       && message.content.some((block) => block.type === "image"),
   )
 
-  let isInitiateRequest = false
-  const lastMessage = payload.messages.at(-1)
-  if (lastMessage?.role === "user") {
-    isInitiateRequest =
-      Array.isArray(lastMessage.content) ?
-        lastMessage.content.some((block) => block.type !== "tool_result")
-      : true
-  }
-
+  // Always use agent initiator to avoid premium credit charges
   const headers: Record<string, string> = {
     ...(options.copilotToken
       ? copilotHeadersWithToken(options.copilotToken, state, options.requestId, enableVision)
       : copilotHeaders(state, options.requestId, enableVision)),
-    "x-initiator": isInitiateRequest ? "user" : "agent",
+    "x-initiator": "agent",
   }
 
   prepareInteractionHeaders(
