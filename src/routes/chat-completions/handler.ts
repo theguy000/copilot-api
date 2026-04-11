@@ -234,11 +234,10 @@ export async function handleCompletion(c: Context) {
 
   // Route via responses API if:
   // 1. Model only supports /responses, OR
-  // 2. Model is GPT-5.x and request uses tools (tool calls + reasoning_effort not supported in /chat/completions)
+  // 2. Model is GPT-5.x (reasoning_effort + tools not supported in /chat/completions)
   const isGpt5 = payload.model.startsWith("gpt-5")
-  const hasTools = Array.isArray(payload.tools) && payload.tools.length > 0
-  const preferResponses = supportsResponses && !supportsChatCompletions
-    || (isGpt5 && hasTools)
+  const preferResponses = (supportsResponses && !supportsChatCompletions)
+    || isGpt5
 
   if (preferResponses) {
     logger.info(
