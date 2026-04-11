@@ -6,6 +6,10 @@ import { awaitApproval } from "~/lib/approval"
 import { getConfig, isResponsesApiWebSearchEnabled } from "~/lib/config"
 import { createHandlerLogger, debugJson, debugJsonTail } from "~/lib/logger"
 import { checkRateLimit } from "~/lib/rate-limit"
+import {
+  getCopilotTokenForRequest,
+  GITHUB_TOKEN_HEADER,
+} from "~/lib/request-token"
 import { state } from "~/lib/state"
 import { generateRequestIdFromPayload, getUUID } from "~/lib/utils"
 import {
@@ -28,6 +32,39 @@ const RESPONSES_ENDPOINT = "/responses"
 export const handleResponses = async (c: Context) => {
   await checkRateLimit(state)
 
+  // Extract per-request GitHub token from proxy and exchange for Copilot token
+  const githubToken = c.req.header(GITHUB_TOKEN_HEADER)
+  let perRequestCopilotToken: string | null = null
+
+  if (githubToken) {
+    logger.info("Per-request GitHub token detected, exchanging for Copilot token...")
+    perRequestCopilotToken = await getCopilotTokenForRequest(githubToken)
+
+    if (!perRequestCopilotToken) {
+      logger.error("Failed to get Copilot token from provided GitHub token")
+      return c.json(
+        {
+          error: {
+            message: "Failed to authenticate with provided GitHub token",
+            type: "authentication_error",
+          },
+        },
+        401,
+      )
+    }
+  } else if (!state.copilotToken) {
+    logger.error("No authentication token available. x-github-token header is required.")
+    return c.json(
+      {
+        error: {
+          message: "No authentication token provided. The x-github-token header is required.",
+          type: "authentication_error",
+        },
+      },
+      401,
+    )
+  }
+
   const payload = await c.req.json<ResponsesPayload>()
   debugJson(logger, "Responses request payload:", payload)
 
@@ -45,6 +82,12 @@ export const handleResponses = async (c: Context) => {
   }
 
   compactInputByLatestCompaction(payload)
+
+  // Cache models if needed (for per-request token flow)
+  if (!state.models && perRequestCopilotToken) {
+    const { cacheModels } = await import("~/lib/utils")
+    await cacheModels(perRequestCopilotToken)
+  }
 
   const selectedModel = state.models?.data.find(
     (model) => model.id === payload.model,
@@ -83,6 +126,7 @@ export const handleResponses = async (c: Context) => {
     initiator,
     requestId,
     sessionId: sessionId,
+    copilotToken: perRequestCopilotToken ?? undefined,
   })
 
   if (isStreamingRequested(payload) && isAsyncIterable(response)) {
