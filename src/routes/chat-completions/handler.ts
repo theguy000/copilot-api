@@ -7,7 +7,7 @@ import type { Model } from "~/services/copilot/get-models"
 
 import { awaitApproval } from "~/lib/approval"
 import { translateModelName, isGeminiModel } from "~/lib/augment-models"
-import { createHandlerLogger } from "~/lib/logger"
+import { createHandlerLogger, debugJson, debugJsonTail } from "~/lib/logger"
 import { checkRateLimit } from "~/lib/rate-limit"
 import {
   getCopilotTokenForRequest,
@@ -119,7 +119,7 @@ export async function handleCompletion(c: Context) {
   const { _augment_format, ...cleanPayload } = rawPayload
   let payload: ChatCompletionsPayload = cleanPayload
 
-  logger.debug("Request payload:", JSON.stringify(payload).slice(-400))
+  debugJsonTail(logger, "Request payload:", { value: payload, tailLength: 400 })
   if (isAugmentFormat) {
     logger.info("Augment format requested - will return NDJSON response")
   }
@@ -215,7 +215,7 @@ export async function handleCompletion(c: Context) {
       ...payload,
       max_tokens: selectedModel?.capabilities.limits.max_output_tokens,
     }
-    logger.debug("Set max_tokens to:", JSON.stringify(payload.max_tokens))
+    debugJson(logger, "Set max_tokens to:", payload.max_tokens)
   }
 
   // not support subagent marker for now, set sessionId = getUUID(requestId)
@@ -258,7 +258,7 @@ export async function handleCompletion(c: Context) {
   })
 
   if (isNonStreaming(response)) {
-    logger.debug("Non-streaming response:", JSON.stringify(response))
+    debugJson(logger, "Non-streaming response:", response)
 
     // Log successful non-streaming response
     const requestDuration = Date.now() - requestStartTime
@@ -658,7 +658,7 @@ export async function handleCompletion(c: Context) {
     let reasoningText: string | undefined
 
     for await (const rawEvent of response) {
-      logger.debug("Raw stream event:", JSON.stringify(rawEvent))
+      debugJson(logger, "Raw stream event:", rawEvent)
       if (rawEvent.data === "[DONE]") {
         // Cache reasoning_opaque for Gemini models with tool_calls
         if (isGemini && toolCallIds.length > 0 && reasoningOpaque) {

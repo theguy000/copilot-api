@@ -3,8 +3,8 @@ import type { Context } from "hono"
 import { streamSSE } from "hono/streaming"
 
 import { awaitApproval } from "~/lib/approval"
-import { getConfig } from "~/lib/config"
-import { createHandlerLogger } from "~/lib/logger"
+import { getConfig, isResponsesApiWebSearchEnabled } from "~/lib/config"
+import { createHandlerLogger, debugJson, debugJsonTail } from "~/lib/logger"
 import { checkRateLimit } from "~/lib/rate-limit"
 import { state } from "~/lib/state"
 import { generateRequestIdFromPayload, getUUID } from "~/lib/utils"
@@ -29,7 +29,7 @@ export const handleResponses = async (c: Context) => {
   await checkRateLimit(state)
 
   const payload = await c.req.json<ResponsesPayload>()
-  logger.debug("Responses request payload:", JSON.stringify(payload))
+  debugJson(logger, "Responses request payload:", payload)
 
   // not support subagent marker for now , set sessionId = getUUID(requestId)
   const requestId = generateRequestIdFromPayload({ messages: payload.input })
@@ -40,8 +40,9 @@ export const handleResponses = async (c: Context) => {
 
   useFunctionApplyPatch(payload)
 
-  // Remove web_search tool as it's not supported by GitHub Copilot
-  removeWebSearchTool(payload)
+  if (!isResponsesApiWebSearchEnabled()) {
+    removeWebSearchTool(payload)
+  }
 
   compactInputByLatestCompaction(payload)
 
@@ -69,7 +70,7 @@ export const handleResponses = async (c: Context) => {
     selectedModel?.capabilities.limits.max_prompt_tokens,
   )
 
-  logger.debug("Translated Responses payload:", JSON.stringify(payload))
+  debugJson(logger, "Translated Responses payload:", payload)
 
   const { vision, initiator } = getResponsesRequestOptions(payload)
 
@@ -90,7 +91,7 @@ export const handleResponses = async (c: Context) => {
       const idTracker = createStreamIdTracker()
 
       for await (const chunk of response) {
-        logger.debug("Responses stream chunk:", JSON.stringify(chunk))
+        debugJson(logger, "Responses stream chunk:", chunk)
 
         const processedData = fixStreamIds(
           (chunk as { data?: string }).data ?? "",
@@ -107,10 +108,10 @@ export const handleResponses = async (c: Context) => {
     })
   }
 
-  logger.debug(
-    "Forwarding native Responses result:",
-    JSON.stringify(response).slice(-400),
-  )
+  debugJsonTail(logger, "Forwarding native Responses result:", {
+    value: response,
+    tailLength: 400,
+  })
   return c.json(response as ResponsesResult)
 }
 

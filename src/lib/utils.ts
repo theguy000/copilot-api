@@ -9,6 +9,7 @@ import type { AnthropicMessagesPayload } from "~/routes/messages/anthropic-types
 import { getModels } from "~/services/copilot/get-models"
 import { getVSCodeVersion } from "~/services/get-vscode-version"
 
+import { getVSCodeDeviceId } from "./deviceid"
 import { state } from "./state"
 
 export const sleep = (ms: number) =>
@@ -23,7 +24,13 @@ export async function cacheModels(copilotToken?: string): Promise<void> {
   const models = await getModels(
     copilotToken ? { copilotToken } : undefined,
   )
-  state.models = models
+  state.models = {
+    ...models,
+    data: models.data.filter(
+      (model) =>
+        model.model_picker_enabled || model.capabilities.type === "embeddings",
+    ),
+  }
 }
 
 export const cacheVSCodeVersion = async () => {
@@ -66,6 +73,11 @@ export const cacheMacMachineId = () => {
     .update(macAddress, "utf8")
     .digest("hex")
   consola.debug(`Using machine ID: ${state.macMachineId}`)
+}
+
+export const cacheVsCodeDeviceId = async () => {
+  state.vsCodeDeviceId = await getVSCodeDeviceId()
+  consola.debug(`Using VSCode device ID: ${state.vsCodeDeviceId}`)
 }
 
 const SESSION_REFRESH_BASE_MS = 60 * 60 * 1000

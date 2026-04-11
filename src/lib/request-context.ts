@@ -3,6 +3,9 @@ import { AsyncLocalStorage } from "node:async_hooks"
 export interface RequestContext {
   traceId: string
   startTime: number
+  userAgent: string
+  sessionAffinity: string | undefined
+  parentSessionId: string | undefined
 }
 
 const TRACE_ID_MAX_LENGTH = 64

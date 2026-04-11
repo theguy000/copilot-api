@@ -11,7 +11,7 @@ import type {
 
 import { getProviderConfig, type ResolvedProviderConfig } from "~/lib/config"
 import { HTTPError } from "~/lib/error"
-import { createHandlerLogger } from "~/lib/logger"
+import { createHandlerLogger, debugJson } from "~/lib/logger"
 import { forwardProviderMessages } from "~/services/providers/anthropic-proxy"
 
 const logger = createHandlerLogger("provider-messages-handler")
@@ -39,10 +39,7 @@ export async function handleProviderMessages(c: Context): Promise<Response> {
     payload.top_p ??= modelConfig?.topP
     payload.top_k ??= modelConfig?.topK
 
-    logger.debug(
-      "provider.messages.request",
-      JSON.stringify({ payload, provider }),
-    )
+    debugJson(logger, "provider.messages.request", { payload, provider })
 
     const upstreamResponse = await forwardProviderMessages(
       providerConfig,
@@ -75,6 +72,10 @@ export async function handleProviderMessages(c: Context): Promise<Response> {
             continue
           }
 
+          if (chunk.data === "[DONE]") {
+            break
+          }
+
           try {
             const parsed = JSON.parse(data) as AnthropicStreamEventData
             if (parsed.type === "message_start") {
@@ -101,10 +102,7 @@ export async function handleProviderMessages(c: Context): Promise<Response> {
 
     adjustInputTokens(providerConfig, jsonBody.usage)
 
-    logger.debug(
-      "provider.messages.no_stream result:",
-      JSON.stringify(jsonBody),
-    )
+    debugJson(logger, "provider.messages.no_stream result:", jsonBody)
     return c.json(jsonBody)
   } catch (error) {
     logger.error("provider.messages.error", {
@@ -133,5 +131,5 @@ const adjustInputTokens = (
       - (usage.cache_creation_input_tokens ?? 0),
   )
   usage.input_tokens = adjustedInput
-  logger.debug("provider.messages.adjusted_usage:", JSON.stringify(usage))
+  debugJson(logger, "provider.messages.adjusted_usage:", usage)
 }

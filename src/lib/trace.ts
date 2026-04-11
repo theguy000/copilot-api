@@ -10,6 +10,9 @@ export const traceIdMiddleware: MiddlewareHandler = async (c, next) => {
   const context = {
     traceId,
     startTime: Date.now(),
+    userAgent: c.req.header("user-agent") || "",
+    sessionAffinity: c.req.header("x-session-affinity"),
+    parentSessionId: c.req.header("x-parent-session-id"),
   }
 
   await requestContext.run(context, async () => {

@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto"
+
 import type { ModelsResponse } from "~/services/copilot/get-models"
 
 export interface State {
@@ -10,6 +12,7 @@ export interface State {
 
   macMachineId?: string
   vsCodeSessionId?: string
+  vsCodeDeviceId: string
 
   manualApprove: boolean
   rateLimitWait: boolean
@@ -19,6 +22,8 @@ export interface State {
   rateLimitSeconds?: number
   lastRequestTimestamp?: number
   verbose: boolean
+
+  copilotApiUrl?: string
 }
 
 export const state: State = {
@@ -27,4 +32,5 @@ export const state: State = {
   rateLimitWait: false,
   showToken: false,
   verbose: false,
+  vsCodeDeviceId: randomUUID(),
 }
