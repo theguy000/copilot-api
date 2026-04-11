@@ -232,9 +232,17 @@ export async function handleCompletion(c: Context) {
     selectedModel?.supported_endpoints?.includes(CHAT_COMPLETIONS_ENDPOINT)
     ?? true
 
-  if (supportsResponses && !supportsChatCompletions) {
+  // Route via responses API if:
+  // 1. Model only supports /responses, OR
+  // 2. Model is GPT-5.x and request uses tools (tool calls + reasoning_effort not supported in /chat/completions)
+  const isGpt5 = payload.model.startsWith("gpt-5")
+  const hasTools = Array.isArray(payload.tools) && payload.tools.length > 0
+  const preferResponses = supportsResponses && !supportsChatCompletions
+    || (isGpt5 && hasTools)
+
+  if (preferResponses) {
     logger.info(
-      `Model ${payload.model} only supports /responses — routing through Responses API bridge`,
+      `Model ${payload.model} — routing through Responses API bridge`,
     )
     return await handleViaResponsesApi(c, payload, {
       requestId,
