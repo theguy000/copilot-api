@@ -53,10 +53,23 @@ export const createChatCompletions = async (
 
   prepareForCompact(headers, options.isCompact)
 
+  // GPT-5.x models require max_completion_tokens instead of max_tokens
+  const sendPayload: Record<string, unknown> = { ...payload }
+  if (
+    typeof payload.model === "string"
+    && payload.model.startsWith("gpt-5")
+    && "max_tokens" in sendPayload
+  ) {
+    if (sendPayload.max_tokens != null) {
+      sendPayload.max_completion_tokens = sendPayload.max_tokens
+    }
+    delete sendPayload.max_tokens
+  }
+
   const response = await fetch(`${copilotBaseUrl(state)}/chat/completions`, {
     method: "POST",
     headers,
-    body: JSON.stringify(payload),
+    body: JSON.stringify(sendPayload),
   })
 
   if (!response.ok) {
